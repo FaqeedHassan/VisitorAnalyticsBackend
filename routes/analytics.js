@@ -20,28 +20,31 @@ router.post(
     try {
       const { browser, device } = req.body;
 
-      // ✅ Step 1: Get client IP
-      let ip = req.headers["x-forwarded-for"]?.split(",")[0] || req.socket.remoteAddress;
-      if (ip.startsWith("::ffff:")) ip = ip.replace("::ffff:", "");
-      if (ip === "::1") ip = "127.0.0.1";
+      // Get IP (from proxy or raw)
+      const ip =
+        req.headers["x-forwarded-for"]?.split(",")[0] || req.socket.remoteAddress;
 
-      // ✅ Step 2: Skip private/internal IPs (localhost, etc.)
-      const isLocal = ["127.0.0.1", "::1", "localhost"].includes(ip);
-      if (isLocal) return res.json({ message: "Localhost IP ignored" });
+      // Clean IP (fallback to public IP for dev)
+      const cleanIP =
+        ip === "::1" || ip.startsWith("::ffff:127") ? "8.8.8.8" : ip;
 
-      // ✅ Step 3: Get country using ipapi.co
+      // Lookup country via ipapi.co
       let country = "Unknown";
       try {
-        const geoRes = await axios.get(`https://ipapi.co/${ip}/json/`);
-        country = geoRes.data.country_name || "Unknown";
+        const response = await axios.get(`https://ipapi.co/${cleanIP}/json/`);
+        country = response.data?.country_name || "Unknown";
       } catch (geoError) {
-        console.warn("Geo IP API failed:", geoError.message);
+        console.warn("Geolocation API failed:", geoError.message);
       }
 
-      // ✅ Step 4: Save visitor
-      const visitor = new Visitor({ ip, browser, device, country });
-      await visitor.save();
+      const visitor = new Visitor({
+        ip: cleanIP,
+        browser,
+        device,
+        country,
+      });
 
+      await visitor.save();
       res.json({ success: true });
     } catch (error) {
       console.error("Tracking error:", error);
@@ -50,7 +53,7 @@ router.post(
   }
 );
 
-// GET /api/data?start=yyyy-mm-dd&end=yyyy-mm-dd
+// GET /api/data
 router.get("/data", async (req, res) => {
   const { start, end } = req.query;
   const filter = {};
@@ -59,6 +62,7 @@ router.get("/data", async (req, res) => {
     const startDate = new Date(start);
     const endDate = new Date(end);
     endDate.setHours(23, 59, 59, 999);
+
     filter.timestamp = {
       $gte: startDate,
       $lte: endDate,
