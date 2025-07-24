@@ -5,7 +5,7 @@ require('dotenv').config();
 
 const app = express();
 app.use(cors({
-  origin: ["http://localhost:5173", "https://your-frontend-domain.com"],
+  origin: ["http://localhost:5173", "https://visitor-analytics-frontend.vercel.app/"],
   methods: ["GET", "POST"],
 }));
 app.use(express.json());
