@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const geoip = require("geoip-lite");
+const axios = require("axios");
 const Visitor = require("../models/Visitor");
 const { body, validationResult } = require("express-validator");
 
@@ -12,7 +12,6 @@ router.post(
     body("device").isString().trim().isLength({ max: 50 }),
   ],
   async (req, res) => {
-    // Validate input
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({ errors: errors.array() });
@@ -21,25 +20,28 @@ router.post(
     try {
       const { browser, device } = req.body;
 
-      // Get IP (handles proxies/load balancers)
-      const ip =
-        req.headers["x-forwarded-for"]?.split(",")[0] || req.socket.remoteAddress;
+      // ✅ Step 1: Get client IP
+      let ip = req.headers["x-forwarded-for"]?.split(",")[0] || req.socket.remoteAddress;
+      if (ip.startsWith("::ffff:")) ip = ip.replace("::ffff:", "");
+      if (ip === "::1") ip = "127.0.0.1";
 
-      // Remove IPv6 localhost formatting (e.g., "::1")
-      const cleanIP = ip === "::1" ? "127.0.0.1" : ip;
+      // ✅ Step 2: Skip private/internal IPs (localhost, etc.)
+      const isLocal = ["127.0.0.1", "::1", "localhost"].includes(ip);
+      if (isLocal) return res.json({ message: "Localhost IP ignored" });
 
-      // Lookup country by IP
-      const geo = geoip.lookup(cleanIP);
-      const country = geo?.country || "Unknown";
+      // ✅ Step 3: Get country using ipapi.co
+      let country = "Unknown";
+      try {
+        const geoRes = await axios.get(`https://ipapi.co/${ip}/json/`);
+        country = geoRes.data.country_name || "Unknown";
+      } catch (geoError) {
+        console.warn("Geo IP API failed:", geoError.message);
+      }
 
-      const visitor = new Visitor({
-        ip: cleanIP,
-        browser,
-        device,
-        country,
-      });
-
+      // ✅ Step 4: Save visitor
+      const visitor = new Visitor({ ip, browser, device, country });
       await visitor.save();
+
       res.json({ success: true });
     } catch (error) {
       console.error("Tracking error:", error);
@@ -56,8 +58,7 @@ router.get("/data", async (req, res) => {
   if (start && end) {
     const startDate = new Date(start);
     const endDate = new Date(end);
-    endDate.setHours(23, 59, 59, 999); // include entire end day
-
+    endDate.setHours(23, 59, 59, 999);
     filter.timestamp = {
       $gte: startDate,
       $lte: endDate,
